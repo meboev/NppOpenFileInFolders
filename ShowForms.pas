@@ -4,8 +4,8 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, NppForms, NppPlugin, FileCtrl, StrUtils, ShellCtrls, ExtCtrls,
-  ComCtrls, Mask, ShellAPI, ShlObj;
+  Dialogs, StdCtrls, NppForms, NppPlugin, SciSupport, FileCtrl, StrUtils, ShellCtrls, ExtCtrls,
+  ComCtrls, Mask, ShellAPI, ShlObj, Registry;
 
 type
   TShowForms = class(TNppForm)
@@ -23,6 +23,11 @@ type
     StatusBar: TStatusBar;
     SearchMemo: TMemo;
     FilesLabel: TLabel;
+    StopButton: TButton;
+    GetFilesTimer: TTimer;
+    procedure SaveSetting;
+    procedure LoadSetting;
+    function GetSelectedText: String;
     procedure OpenFolderButtonClick(Sender: TObject);
     procedure GetFilesButtonClick(Sender: TObject);
     procedure SearchListBoxClick(Sender: TObject);
@@ -32,30 +37,26 @@ type
     procedure SearchMemoChange(Sender: TObject);
     procedure SearchMemoKeyDown(Sender: TObject; var Key: Word;
       Shift: TShiftState);
-    procedure FormClose(Sender: TObject; var Action: TCloseAction);
-  end;
-
-  TGetFilesThread = class(TThread)
+    procedure MaxResultsComboBoxClick(Sender: TObject);
+    procedure StopButtonClick(Sender: TObject);
+    procedure FormCloseQuery(Sender: TObject; var CanClose: Boolean);
+    procedure GetFilesTimerTimer(Sender: TObject);
+    procedure FilesMemoKeyDown(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
   private
-    FDirsStringList: TStringList;
+    FPrevSearch: String;
     FExcludesStringList: TStringList;
-    FFile: string;
+    procedure GetFiles;
     procedure AddAllFilesInDir(const Dir: string);
-    procedure UpdateMainThread;
-    procedure BeginUpdateMainThread;
-    procedure EndUpdateMainThread;
-  protected
-    procedure Execute; override;
-  public
-    constructor Create(Dirs: string; Excludes: string);
-    destructor Destroy; override;
   end;
-
 
 var
   ShowForm: TShowForms;
-  GetFilesThread: TGetFilesThread;
-  GetFilesThreadTerminated: Boolean;
+  SearchFromRegistry: String;
+  isGetFilesStopped: Boolean;
+  stopGetFiles: Boolean;
+  closeAfterStopGetFiles: Boolean;
+
 
 {$IFDEF UNICODE}
   function ILCreateFromPath(pszPath: PChar): PItemIDList stdcall; external shell32
@@ -87,14 +88,20 @@ begin
     end;
 end;
 
-{ TGetFilesThread }
+{ TShowForms }
 
-constructor TGetFilesThread.Create(Dirs: string; Excludes: string);
+procedure TShowForms.GetFiles;
 var
   i: Integer;
-  tmp: String;
+  Dirs: String;
+  Excludes: String;
+  FDirsStringList: TStringList;
 begin
-  inherited Create(True);
+  isGetFilesStopped := false;
+  stopGetFiles := false;
+
+  Dirs := FoldersEdit.Text;
+  Excludes := ExcludesEdit.Text;
 
   Dirs := StringReplace(Dirs, ' ', '*', [rfReplaceAll]);
   FDirsStringList := TStringList.Create;
@@ -110,90 +117,71 @@ begin
   for i := 0 to FExcludesStringList.Count - 1 do
     FExcludesStringList[i] := Trim(StringReplace(FExcludesStringList[i], '*', ' ', [rfReplaceAll]));
 
-  FreeOnTerminate := True;
-end;
+  FilesMemo.Lines.Clear;
+  FilesMemo.Update;
+  FilesMemo.Lines.BeginUpdate;
 
-destructor TGetFilesThread.Destroy;
-begin
-  FExcludesStringList.Free;
-  FDirsStringList.Free;
-  
-  GetFilesThreadTerminated := true;
-  inherited;
-end;
-
-procedure TGetFilesThread.Execute;
-var
-  i: Integer;
-begin
-//  Synchronize(BeginUpdateMainThread);
-  BeginUpdateMainThread;
   for i := 0 to FDirsStringList.Count - 1 do
     AddAllFilesInDir(FDirsStringList[i]);
-  EndUpdateMainThread;
-//  Synchronize(EndUpdateMainThread);
+
+  FilesMemo.Lines.EndUpdate;
+
+  StatusBar.SimpleText := 'Loaded files: ' +
+    IntToStr(FilesMemo.Lines.Count);
+
+  FPrevSearch := '';
+  SearchMemoChange(nil);
+  SearchMemo.SetFocus;
+
+  FExcludesStringList.Free;
+  FDirsStringList.Free;
+
+  // Set the values as in the Form Show
+  isGetFilesStopped := true;
+  stopGetFiles := false;
+
+  if closeAfterStopGetFiles then ShowForm.Close;
 end;
 
-procedure TGetFilesThread.AddAllFilesInDir(const Dir: string);
+procedure TShowForms.AddAllFilesInDir(const Dir: string);
 var
   SR: TSearchRec;
   Excluded: Boolean;
   FullPath: String;
   i: Integer;
 begin
+  if stopGetFiles or Application.Terminated then Exit;
   if FindFirst(IncludeTrailingBackslash(Dir) + '*.*', faAnyFile or faDirectory, SR) = 0 then
     try
       repeat
-        if Terminated then Exit;
-        FullPath := IncludeTrailingBackslash(Dir) + SR.Name;
+        if stopGetFiles or Application.Terminated then Exit;
+        Application.ProcessMessages;
+
+        if (SR.Name = '.') or (SR.Name = '..') then Continue;
+
         Excluded := false;
+        FullPath := IncludeTrailingBackslash(Dir) + SR.Name;
         for i := 0 to FExcludesStringList.Count - 1 do
-          if (SR.Name = '.') or (SR.Name = '..') or
-            AnsiContainsText(FullPath, FExcludesStringList[i]) then
-            begin
-              Excluded := true;
-              Break;
-            end;
+          if AnsiContainsText(FullPath, FExcludesStringList[i]) then begin
+            Excluded := true;
+            Break;
+          end;
         if Excluded then Continue;
 
-        if (SR.Attr and faDirectory) = 0 then
-          begin
-            FFile := FullPath;
-            //Synchronize(UpdateMainThread);
-            UpdateMainThread;
-            Continue;
-          end;
+        if (SR.Attr and faDirectory) = 0 then begin
+          FilesMemo.Lines.Add(FullPath);
+          StatusBar.SimpleText := 'Loading files: ' +
+            IntToStr(FilesMemo.Lines.Count) + '...';
+          Continue;
+        end;
 
         AddAllFilesInDir(FullPath);
+        if stopGetFiles or Application.Terminated then Exit;
      until FindNext(Sr) <> 0;
    finally
      FindClose(SR);
    end;
 end;
-
-procedure TGetFilesThread.UpdateMainThread;
-begin
-  ShowForm.FilesMemo.Lines.Add(FFile);
-  ShowForm.StatusBar.SimpleText := 'Loading files: ' +
-    IntToStr(ShowForm.FilesMemo.Lines.Count) + '...';
-end;
-
-procedure TGetFilesThread.BeginUpdateMainThread;
-begin
-  ShowForm.FilesMemo.Lines.Clear;
-  ShowForm.FilesMemo.Update;
-  ShowForm.FilesMemo.Lines.BeginUpdate;
-end;
-
-procedure TGetFilesThread.EndUpdateMainThread;
-begin
-  ShowForm.StatusBar.SimpleText := 'Loaded files: ' +
-    IntToStr(ShowForm.FilesMemo.Lines.Count);
-  ShowForm.FilesMemo.Lines.EndUpdate;
-end;
-
-
-{ TShowForms }
 
 procedure TShowForms.OpenFolderButtonClick(Sender: TObject);
 var d: String;
@@ -209,48 +197,22 @@ end;
 
 procedure TShowForms.GetFilesButtonClick(Sender: TObject);
 begin
-  while not GetFilesThreadTerminated do begin
-    if GetFilesThread <> nil then GetFilesThread.Terminate;
-    Application.ProcessMessages;
-  end;
-
-  GetFilesThreadTerminated := false;
-  GetFilesThread := TGetFilesThread.Create(FoldersEdit.Text, ExcludesEdit.Text);
-  GetFilesThread.Resume;
-end;
-
-procedure TShowForms.SearchListBoxClick(Sender: TObject);
-begin
-  SearchMemo.SetFocus;
-end;
-
-procedure TShowForms.FormShow(Sender: TObject);
-begin
-  GetFilesButtonClick(nil);
+  stopGetFiles := true;
+  while not isGetFilesStopped do Application.ProcessMessages;
+  stopGetFiles := false;
 
   SearchMemo.SetFocus;
-  SearchMemo.SelectAll;
+  GetFiles;
 end;
 
 procedure TShowForms.FormCreate(Sender: TObject);
 begin
-  GetFilesThreadTerminated := true;
-
   ExcludesEdit.DoubleBuffered := true;
   FoldersEdit.DoubleBuffered := true;
   MaxResultsComboBox.DoubleBuffered := true;
   SearchMemo.DoubleBuffered := true;
   FilesMemo.DoubleBuffered := true;
-//  SearchListBox.DoubleBuffered := true;
   StatusBar.DoubleBuffered := true;
-end;
-
-procedure TShowForms.SearchListBoxDblClick(Sender: TObject);
-var
-  ret: Word;
-begin
-  ret := 13;
-  SearchMemoKeyDown(nil, ret, []);
 end;
 
 procedure TShowForms.SearchMemoChange(Sender: TObject);
@@ -259,10 +221,19 @@ var
   max: Integer;
   s: String;
 begin
+  if SearchMemo.Lines.Text = '' then begin
+    SearchListBox.Items.Clear;
+    FPrevSearch := '';
+    Exit;
+  end;
+
   s := SearchMemo.Lines.Text;
   s := StringReplace(s, #13, '', [rfReplaceAll]);
   s := StringReplace(s, #10, '', [rfReplaceAll]);
   SearchMemo.Lines.Text := s;
+
+  if SearchMemo.Lines.Text = FPrevSearch then Exit;
+  FPrevSearch := s;
 
   SearchListBox.Items.BeginUpdate;
   SearchListBox.Items.Clear;
@@ -282,8 +253,6 @@ procedure TShowForms.SearchMemoKeyDown(Sender: TObject; var Key: Word;
 var
   filename: nppString;
 begin
-  inherited;
-
   if SearchListBox.ItemIndex < 0 then SearchListBox.ItemIndex := 0;
   case Key of
     VK_DOWN:
@@ -321,24 +290,177 @@ begin
             filename := SearchListBox.Items[SearchListBox.ItemIndex];
             if (Shift = [ssCtrl]) then
               begin
-                if not OpenFolderAndSelectFile(filename) then
+                if not OpenFolderAndSelectFile(filename) then begin
                   SendMessage(self.Npp.NppData.NppHandle, WM_DOOPEN, 0, LPARAM(PChar(filename)));
+                  Close;
+                end else
+                  //SearchMemo.SelectAll;
+                  SearchMemo.SelStart := Length(SearchMemo.Text);
+                  //Close;
               end
-            else
+            else begin
               SendMessage(self.Npp.NppData.NppHandle, WM_DOOPEN, 0, LPARAM(PChar(filename)));
-            SearchListBox.Clear;
-            SearchMemo.Clear;
-            Close;
+              Close;
+            end;
           end;
+      end;
+    VK_ESCAPE:
+      begin
+        Key := 0;
+        if isGetFilesStopped then
+          ShowForm.Close
+        else begin
+          stopGetFiles := true;
+          closeAfterStopGetFiles := true;
+        end;
       end;
   end;
 end;
 
-procedure TShowForms.FormClose(Sender: TObject; var Action: TCloseAction);
+procedure TShowForms.FormShow(Sender: TObject);
+var
+  selectedText: String;
 begin
-  while not GetFilesThreadTerminated do begin
-    if GetFilesThread <> nil then GetFilesThread.Terminate;
-    Application.ProcessMessages;
+  isGetFilesStopped := true;
+  stopGetFiles := false;
+  closeAfterStopGetFiles := false;
+
+  LoadSetting;
+
+  selectedText := GetSelectedText;
+  if (selectedText <> '') then
+    SearchMemo.Lines.Text := selectedText
+  else if (SearchFromRegistry <> '') then
+    SearchMemo.Lines.Text := SearchFromRegistry;
+
+  SearchMemo.SetFocus;
+  SearchMemo.SelectAll;
+
+
+  GetFilesTimer.Enabled := true;
+end;
+
+procedure TShowForms.SaveSetting;
+var
+  Reg: TRegistry;
+begin
+  Reg:= TRegistry.Create;
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKey('SOFTWARE\NPPOpenFileInFoldersPlugin', true) then begin
+      Reg.WriteString('Excludes', ExcludesEdit.Text);
+      Reg.WriteString('Folders', FoldersEdit.Text);
+      Reg.WriteInteger('MaxResultsItemIndex', MaxResultsComboBox.ItemIndex);
+      Reg.WriteString('Search', SearchMemo.Lines.Text);
+      Reg.WriteInteger('Height', ShowForm.Height);
+      Reg.WriteInteger('Width', ShowForm.Width);
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure TShowForms.LoadSetting;
+var
+  Reg: TRegistry;
+begin
+  ExcludesEdit.Text := '';
+  FoldersEdit.Text := '';
+  MaxResultsComboBox.ItemIndex := 0;
+
+  Reg:= TRegistry.Create;
+  try
+    Reg.RootKey := HKEY_CURRENT_USER;
+    if Reg.OpenKey('SOFTWARE\NPPOpenFileInFoldersPlugin', false) then begin
+      try ExcludesEdit.Text := Reg.ReadString('Excludes'); except end;
+      try FoldersEdit.Text := Reg.ReadString('Folders'); except end;
+      try MaxResultsComboBox.ItemIndex := Reg.ReadInteger('MaxResultsItemIndex'); except end;
+      try SearchFromRegistry := Reg.ReadString('Search'); except end;
+      try ShowForm.Height := Reg.ReadInteger('Height'); except end;
+      try ShowForm.Width := Reg.ReadInteger('Width'); except end;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
+function TShowForms.GetSelectedText: String;
+var
+  len: Integer;
+begin
+  SetLength(Result, 1024);
+  SendMessage(self.Npp.NppData.ScintillaMainHandle, SciSupport.SCI_GETSELTEXT, 0, LPARAM(PChar(Result)));
+  len := StrLen(PChar(Result));
+  if len > 1024 then len := 1024;
+  SetString(Result, PChar(Result), len);
+end;
+
+procedure TShowForms.MaxResultsComboBoxClick(Sender: TObject);
+begin
+  SearchMemo.SetFocus;
+  //SearchMemo.SelectAll;
+  SearchMemo.SelStart := Length(SearchMemo.Text);
+
+  FPrevSearch := '';
+  SearchMemoChange(nil);
+  SearchMemo.SetFocus;
+end;
+
+procedure TShowForms.SearchListBoxClick(Sender: TObject);
+begin
+  SearchMemo.SetFocus;
+  //SearchMemo.SelectAll;
+  SearchMemo.SelStart := Length(SearchMemo.Text);
+end;
+
+procedure TShowForms.SearchListBoxDblClick(Sender: TObject);
+var
+  ret: Word;
+begin
+  ret := 13;
+  SearchMemoKeyDown(nil, ret, []);
+end;
+
+procedure TShowForms.StopButtonClick(Sender: TObject);
+begin
+  stopGetFiles := true;
+  SearchMemo.SetFocus;
+end;
+
+procedure TShowForms.FormCloseQuery(Sender: TObject;
+  var CanClose: Boolean);
+begin
+  SaveSetting;
+
+  if isGetFilesStopped then begin
+    CanClose := true;
+  end else begin
+    CanClose := false;
+    stopGetFiles := true;
+    closeAfterStopGetFiles := true;
+  end;
+end;
+
+procedure TShowForms.GetFilesTimerTimer(Sender: TObject);
+begin
+  GetFilesTimer.Enabled := false;
+  GetFilesButtonClick(nil);
+end;
+
+procedure TShowForms.FilesMemoKeyDown(Sender: TObject; var Key: Word;
+  Shift: TShiftState);
+begin
+  case Key of
+    VK_ESCAPE:
+      begin
+        Key := 0;
+        if isGetFilesStopped then
+          ShowForm.Close
+        else begin
+          stopGetFiles := true;
+          closeAfterStopGetFiles := true;
+        end;
+      end;
   end;
 end;
 

@@ -8,10 +8,11 @@ uses
 
 type
   TAboutForm = class(TNppForm)
-    Button1: TButton;
-    Label1: TLabel;
-    Label2: TLabel;
-    procedure Button1Click(Sender: TObject);
+    OkButton: TButton;
+    VersionLabel: TLabel;
+    ProductLabel: TLabel;
+    Label3: TLabel;
+    procedure OkButtonClick(Sender: TObject);
   end;
 
 var
@@ -21,9 +22,8 @@ implementation
 
 {$R *.dfm}
 
-procedure TAboutForm.Button1Click(Sender: TObject);
+procedure TAboutForm.OkButtonClick(Sender: TObject);
 begin
-  inherited;
   Close;
 end;
 
