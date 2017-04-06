@@ -105,6 +105,7 @@ inherited ShowForms: TShowForms
     TabStop = False
     Anchors = [akLeft, akTop, akRight, akBottom]
     ItemHeight = 13
+    MultiSelect = True
     TabOrder = 1
     OnClick = SearchListBoxClick
     OnDblClick = SearchListBoxDblClick

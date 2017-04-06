@@ -219,7 +219,8 @@ procedure TShowForms.SearchMemoChange(Sender: TObject);
 var
   i: Integer;
   max: Integer;
-  s: String;
+  s, sWin, sLin: String;
+  newSearch: TStringList;
 begin
   if SearchMemo.Lines.Text = '' then begin
     SearchListBox.Items.Clear;
@@ -230,78 +231,153 @@ begin
   s := SearchMemo.Lines.Text;
   s := StringReplace(s, #13, '', [rfReplaceAll]);
   s := StringReplace(s, #10, '', [rfReplaceAll]);
+  sWin := StringReplace(s, '/', '\', [rfReplaceAll]);
+  sLin := StringReplace(s, '\', '/', [rfReplaceAll]);
   SearchMemo.Lines.Text := s;
 
   if SearchMemo.Lines.Text = FPrevSearch then Exit;
   FPrevSearch := s;
 
-  SearchListBox.Items.BeginUpdate;
-  SearchListBox.Items.Clear;
+  newSearch := TStringList.Create;
   max := StrToIntDef(MaxResultsComboBox.Text, -1);
   for i := 0 to FilesMemo.Lines.Count - 1 do
-    if AnsiContainsText(FilesMemo.Lines[i], SearchMemo.Lines.Text) then
+    if AnsiContainsText(FilesMemo.Lines[i], s) or
+       AnsiContainsText(FilesMemo.Lines[i], sWin) or
+       AnsiContainsText(FilesMemo.Lines[i], sLin) then
       begin
-        SearchListBox.Items.Add(FilesMemo.Lines[i]);
-        if (max <> -1) and (SearchListBox.Items.Count >= max) then Break;
+        newSearch.Add( FilesMemo.Lines[i] );
+        if (max <> -1) and (newSearch.Count >= max) then Break;
       end;
-  SearchListBox.ItemIndex := 0;
-  SearchListBox.Items.EndUpdate;
+
+  if (SearchListBox.Items.Text <> newSearch.Text) then
+    begin
+      SearchListBox.Items.Text := newSearch.Text;
+      if SearchListBox.Items.Count > 0 then SearchListBox.Selected[0] := true;
+    end;
+
+  newSearch.Free;
 end;
 
 procedure TShowForms.SearchMemoKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 var
   filename: nppString;
+  i, topSelected, newTopSelected, bottomSelected, newBottomSelected: Integer;
+  shouldClose, shouldGoToEnd: Boolean;
 begin
-  if SearchListBox.ItemIndex < 0 then SearchListBox.ItemIndex := 0;
+  topSelected := -1;
+  newTopSelected := -1;
+  bottomSelected := -1;
+  newBottomSelected := -1;
+
+  if (SearchListBox.Count > 0) and (
+    (Key = VK_DOWN) or (Key = VK_UP) or
+    (Key = VK_PRIOR) or (Key = VK_NEXT) or
+    (Key = VK_RETURN) or (Key = VK_ESCAPE) ) then
+    begin
+      for i := 0 to SearchListBox.Count - 1 do
+        if SearchListBox.Selected[i] then
+          begin
+            if topSelected = -1 then topSelected := i;
+            bottomSelected := i;
+          end;
+
+      if topSelected = -1 then
+        begin
+          topSelected := 0;
+          bottomSelected := 0;
+          SearchListBox.Selected[0] := true;
+        end;
+    end;
+
   case Key of
     VK_DOWN:
       begin
-        SearchListBox.ItemIndex := SearchListBox.ItemIndex + 1;
+        newBottomSelected := bottomSelected;
+        if bottomSelected < SearchListBox.Count - 1 then
+          newBottomSelected := bottomSelected + 1;
+
+        if not (ssShift in Shift) and
+          not (ssCtrl in Shift) then
+            SearchListBox.ClearSelection;
+
+        SearchListBox.Selected[ newBottomSelected ] := true;
         Key := 0;
       end;
     VK_UP:
       begin
-        if SearchListBox.ItemIndex <> 0 then
-          SearchListBox.ItemIndex := SearchListBox.ItemIndex - 1;
-        Key := 0;
-      end;
-    VK_PRIOR: // Page Up
-      begin
-        if SearchListBox.ItemIndex - 5 >= 0 then
-          SearchListBox.ItemIndex := SearchListBox.ItemIndex - 5
-        else
-          SearchListBox.ItemIndex := 0;
+        newTopSelected := topSelected;
+        if topSelected > 0 then
+          newTopSelected := topSelected - 1;
+
+        if not (ssShift in Shift) and
+          not (ssCtrl in Shift) then
+            SearchListBox.ClearSelection;
+
+        SearchListBox.Selected[ newTopSelected ] := true;
         Key := 0;
       end;
     VK_NEXT: // Page Down
       begin
-        if SearchListBox.ItemIndex + 5 < SearchListBox.Items.Count - 1  then
-          SearchListBox.ItemIndex := SearchListBox.ItemIndex + 5
-        else
-          SearchListBox.ItemIndex := SearchListBox.Items.Count - 1;
+        if SearchListBox.Items.Count > 0 then
+          if bottomSelected + 5 < SearchListBox.Items.Count - 1  then
+            newBottomSelected := bottomSelected + 5
+          else
+            newBottomSelected := SearchListBox.Items.Count - 1;
+
+        if not (ssShift in Shift) and
+          not (ssCtrl in Shift) then
+            begin
+              SearchListBox.ClearSelection;
+              SearchListBox.Selected[ newBottomSelected ] := true;
+            end
+        else for i := bottomSelected to newBottomSelected do
+          SearchListBox.Selected[ i ] := true;
+        Key := 0;
+      end;
+    VK_PRIOR: // Page Up
+      begin
+        if SearchListBox.Items.Count > 0 then
+          if topSelected - 5 > 0 then
+            newTopSelected := topSelected - 5
+          else
+            newTopSelected := 0;
+
+        if not (ssShift in Shift) and
+          not (ssCtrl in Shift) then
+            begin
+              SearchListBox.ClearSelection;
+              SearchListBox.Selected[ newTopSelected ] := true;
+            end
+        else for i := topSelected downto newTopSelected do
+          SearchListBox.Selected[ i ] := true;
         Key := 0;
       end;
     VK_RETURN:
       begin
         Key := 0;
-        if SearchListBox.ItemIndex >= 0 then
+        shouldClose := false;
+        shouldGoToEnd := false;
+        if topSelected <> -1 then
           begin
-            filename := SearchListBox.Items[SearchListBox.ItemIndex];
-            if (Shift = [ssCtrl]) then
-              begin
-                if not OpenFolderAndSelectFile(filename) then begin
-                  SendMessage(self.Npp.NppData.NppHandle, WM_DOOPEN, 0, LPARAM(PChar(filename)));
-                  Close;
-                end else
-                  //SearchMemo.SelectAll;
-                  SearchMemo.SelStart := Length(SearchMemo.Text);
-                  //Close;
-              end
-            else begin
-              SendMessage(self.Npp.NppData.NppHandle, WM_DOOPEN, 0, LPARAM(PChar(filename)));
-              Close;
-            end;
+            for i := 0 to SearchListBox.Count - 1 do
+              if SearchListBox.Selected[i] then
+                begin
+                  filename := SearchListBox.Items[ i ];
+                  if (Shift = [ssCtrl]) then
+                    begin
+                      if not OpenFolderAndSelectFile(filename) then begin
+                        SendMessage(self.Npp.NppData.NppHandle, WM_DOOPEN, 0, LPARAM(PChar(filename)));
+                        shouldClose := true;
+                      end else shouldGoToEnd := true;
+                    end
+                  else begin
+                    SendMessage(self.Npp.NppData.NppHandle, WM_DOOPEN, 0, LPARAM(PChar(filename)));
+                    shouldClose := true;
+                  end;
+                end;
+            if shouldClose then Close;
+            if shouldGoToEnd then SearchMemo.SelStart := Length(SearchMemo.Text);
           end;
       end;
     VK_ESCAPE:

@@ -1,7 +1,7 @@
 # NppOpenFileInFolders
 
 Notepad++ Plugin written in Delphi 7 - Open File In Folders
-version 1.02
+version 1.03
 
 ### Installation
 
@@ -16,6 +16,8 @@ If you do not want to compile it, just download the OpenFileInFolders.dll and pl
 - You can see/copy the full path of all the files you are searching into.
 - You can limit the results to a predefined values, to speed up the search for big projects
 - You can open the results directly inside a Windows Explorer window
+- You can select/open multiple results, and the selection will be preserved if the results are the same
+- Forward / Back slashes paths insensitive searching 
 
 ### Screenshots
 
