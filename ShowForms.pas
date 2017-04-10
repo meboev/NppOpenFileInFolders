@@ -198,8 +198,11 @@ end;
 procedure TShowForms.GetFilesButtonClick(Sender: TObject);
 begin
   stopGetFiles := true;
-  while not isGetFilesStopped do Application.ProcessMessages;
-  stopGetFiles := false;
+  if not isGetFilesStopped then
+    begin
+      GetFilesTimer.Enabled := true;
+      Exit;
+    end;
 
   SearchMemo.SetFocus;
   GetFiles;

@@ -11,7 +11,7 @@ type
     OkButton: TButton;
     VersionLabel: TLabel;
     ProductLabel: TLabel;
-    Label3: TLabel;
+    AdditionalLabel: TLabel;
     procedure OkButtonClick(Sender: TObject);
   end;
 
