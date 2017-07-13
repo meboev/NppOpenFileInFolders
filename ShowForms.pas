@@ -267,7 +267,11 @@ var
   filename: nppString;
   i, topSelected, newTopSelected, bottomSelected, newBottomSelected: Integer;
   shouldClose, shouldGoToEnd: Boolean;
+  selectedItems: TStringList;
+  SearchText: String;
 begin
+  SearchText := SearchMemo.Text;
+
   topSelected := -1;
   newTopSelected := -1;
   bottomSelected := -1;
@@ -363,10 +367,13 @@ begin
         shouldGoToEnd := false;
         if topSelected <> -1 then
           begin
+            selectedItems := TStringList.Create;
             for i := 0 to SearchListBox.Count - 1 do
-              if SearchListBox.Selected[i] then
+              if SearchListBox.Selected[i] then selectedItems.Add( SearchListBox.Items[ i ] );
+
+            for i := 0 to selectedItems.Count - 1 do
                 begin
-                  filename := SearchListBox.Items[ i ];
+                  filename := selectedItems[ i ];
                   if (Shift = [ssCtrl]) then
                     begin
                       if not OpenFolderAndSelectFile(filename) then begin
@@ -379,6 +386,9 @@ begin
                     shouldClose := true;
                   end;
                 end;
+            selectedItems.Free;
+            SearchMemo.Text := SearchText;
+
             if shouldClose then Close;
             if shouldGoToEnd then SearchMemo.SelStart := Length(SearchMemo.Text);
           end;

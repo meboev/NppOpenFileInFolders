@@ -1,7 +1,7 @@
 # NppOpenFileInFolders
 
 Notepad++ Plugin written in Delphi 7 - Open File In Folders
-version 1.03a
+version 1.03b
 
 ### Installation
 
